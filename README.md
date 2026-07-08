@@ -7,7 +7,7 @@ Everything happens inside the dropdown menu — no windows are opened.
 ## Features
 
 - Lives in the menu bar as a 🚗 icon (no Dock icon)
-- **From** box pre-filled with `51 Franklin Ave, Seaside Heights, NJ` — editable for one-off trips
+- **From** box pre-filled, and editable for one-off trips
 - **To** box accepts a city name (`Philadelphia`) or a full address
 - Traffic-aware drive time and mileage via Apple MapKit, shown in bold in the menu
 - Result updates in place while the menu stays open; last result stays visible

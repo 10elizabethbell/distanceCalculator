@@ -4,6 +4,7 @@ import MapKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
+    private var menu: NSMenu!
     private var resultItem: NSMenuItem!
     private var fromField: NSTextField!
     private var toField: NSTextField!
@@ -11,12 +12,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let originAddress = "51 Franklin Ave, Seaside Heights, NJ"
     private var geocodeCache: [String: CLLocationCoordinate2D] = [:]
     private var isCalculating = false
+    private var pendingMenuOpen = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "🚗"
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(statusItemClicked)
 
-        let menu = NSMenu()
+        menu = NSMenu()
         menu.autoenablesItems = false
         menu.delegate = self
 
@@ -34,8 +38,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let quitItem = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quitItem)
+        // The menu is deliberately NOT assigned to statusItem here; see statusItemClicked.
+    }
 
+    // Text fields in the menu can only take keyboard focus while the app is
+    // active, but activation is asynchronous (cooperative) — and if it lands
+    // while the menu is already tracking, the tracking session is cancelled
+    // and the menu closes. So: request activation, open the menu only once
+    // the app is actually active (or after a short fallback delay if the
+    // system refuses activation).
+    @objc private func statusItemClicked() {
+        if NSApp.isActive {
+            openMenu()
+            return
+        }
+        pendingMenuOpen = true
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.pendingMenuOpen else { return }
+            self.pendingMenuOpen = false
+            self.openMenu()
+        }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if pendingMenuOpen {
+            pendingMenuOpen = false
+            openMenu()
+        }
+    }
+
+    private func openMenu() {
         statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        statusItem.menu = nil
     }
 
     private func makeFormView() -> NSView {
@@ -77,16 +116,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        NSApp.activate(ignoringOtherApps: true)
-        // Main-queue dispatch doesn't run during menu tracking; use the run loop in common modes.
+        focusToField(attempts: 40)
+    }
+
+    // The view isn't in the menu's host window yet when menuWillOpen fires;
+    // retry on subsequent run loop cycles (common modes, so it runs during
+    // menu tracking) until the window exists.
+    private func focusToField(attempts: Int) {
         RunLoop.main.perform(inModes: [.common]) { [weak self] in
-            guard let self, let window = self.toField.window else { return }
-            window.makeFirstResponder(self.toField)
+            guard let self else { return }
+            if let window = self.toField.window {
+                window.makeFirstResponder(self.toField)
+            } else if attempts > 0 {
+                self.focusToField(attempts: attempts - 1)
+            }
         }
+        CFRunLoopWakeUp(CFRunLoopGetMain())
     }
 
     @objc private func closeMenu() {
-        statusItem.menu?.cancelTracking()
+        menu.cancelTracking()
     }
 
     @objc private func calculate() {
