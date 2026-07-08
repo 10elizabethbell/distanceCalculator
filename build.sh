@@ -13,12 +13,27 @@ swiftc -O -o distancecalc DistanceCalculator.swift \
 echo "Compiling C launcher..."
 clang -O2 -Wall -o launcher launcher.c
 
+# Regenerate the app icon when the generator script has changed.
+if [[ ! -f AppIcon.icns || makeicon.swift -nt AppIcon.icns ]]; then
+    echo "Generating AppIcon.icns..."
+    swift makeicon.swift icon_1024.png
+    ICONSET="$(mktemp -d)/AppIcon.iconset"
+    mkdir -p "$ICONSET"
+    for s in 16 32 128 256 512; do
+        sips -z "$s" "$s" icon_1024.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+        sips -z "$((s*2))" "$((s*2))" icon_1024.png --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+    done
+    iconutil -c icns "$ICONSET" -o AppIcon.icns
+    rm -rf "$(dirname "$ICONSET")" icon_1024.png
+fi
+
 echo "Assembling ${APP}..."
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp launcher "$APP/Contents/MacOS/DistanceCalculator"
 cp distancecalc "$APP/Contents/MacOS/distancecalc"
+cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -39,6 +54,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <string>APPL</string>
     <key>CFBundleExecutable</key>
     <string>DistanceCalculator</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>
