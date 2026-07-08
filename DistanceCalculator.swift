@@ -95,9 +95,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let destination = toField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !origin.isEmpty, !destination.isEmpty else { return }
 
-        closeMenu()
         isCalculating = true
         statusItem.button?.title = "🚗 …"
+        resultItem.attributedTitle = nil
+        resultItem.title = "Calculating…"
 
         cachedGeocode(origin) { [weak self] originResult in
             guard let self else { return }
@@ -131,9 +132,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // The main dispatch queue is starved while the menu is being tracked, so
+    // deliver completions via the run loop in common modes (which include
+    // event tracking) to allow updating the open menu in place.
+    private func onMain(_ block: @escaping () -> Void) {
+        RunLoop.main.perform(inModes: [.common], block: block)
+        CFRunLoopWakeUp(CFRunLoopGetMain())
+    }
+
     private func geocode(_ address: String, completion: @escaping (Result<CLLocationCoordinate2D, Error>) -> Void) {
         geocoder.geocodeAddressString(address) { placemarks, error in
-            DispatchQueue.main.async {
+            self.onMain {
                 if let coordinate = placemarks?.first?.location?.coordinate {
                     completion(.success(coordinate))
                 } else {
@@ -157,8 +166,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         request.transportType = .automobile
 
         MKDirections(request: request).calculateETA { [weak self] response, error in
-            DispatchQueue.main.async {
-                guard let self else { return }
+            guard let self else { return }
+            self.onMain {
                 if let response {
                     self.finish(with: .success(response), origin: originName, destination: destinationName)
                 } else {
@@ -183,15 +192,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let time = formatter.string(from: response.expectedTravelTime) ?? "?"
             let miles = response.distance / 1609.344
             let summary = "\(time) (\(String(format: "%.0f", miles)) mi)"
-            resultItem.title = origin == originAddress
-                ? "To \(destination): \(summary)"
-                : "\(origin) → \(destination): \(summary)"
+            let prefix = origin == originAddress
+                ? "To \(destination): "
+                : "\(origin) → \(destination): "
+
+            let fontSize = NSFont.systemFontSize
+            let title = NSMutableAttributedString(string: prefix, attributes: [
+                .font: NSFont.menuFont(ofSize: fontSize),
+                .foregroundColor: NSColor.labelColor,
+            ])
+            title.append(NSAttributedString(string: summary, attributes: [
+                .font: NSFont.boldSystemFont(ofSize: fontSize),
+                .foregroundColor: NSColor.labelColor,
+            ]))
+            resultItem.attributedTitle = title
+            resultItem.title = prefix + summary
         case .failure(let error):
+            resultItem.attributedTitle = nil
             resultItem.title = "Error: \(error.localizedDescription)"
         }
-
-        // Reopen the menu so the result is visible without any extra window.
-        statusItem.button?.performClick(nil)
     }
 }
 
