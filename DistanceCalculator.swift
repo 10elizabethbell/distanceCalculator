@@ -2,12 +2,15 @@ import AppKit
 import CoreLocation
 import MapKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var resultItem: NSMenuItem!
+    private var fromField: NSTextField!
+    private var toField: NSTextField!
     private let geocoder = CLGeocoder()
     private let originAddress = "51 Franklin Ave, Seaside Heights, NJ"
     private var geocodeCache: [String: CLLocationCoordinate2D] = [:]
+    private var isCalculating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -15,20 +18,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
         menu.autoenablesItems = false
+        menu.delegate = self
 
-        let originItem = NSMenuItem(title: "From: \(originAddress)", action: nil, keyEquivalent: "")
-        originItem.isEnabled = false
-        menu.addItem(originItem)
+        let formItem = NSMenuItem()
+        formItem.view = makeFormView()
+        menu.addItem(formItem)
+
+        menu.addItem(.separator())
 
         resultItem = NSMenuItem(title: "No trip calculated yet", action: nil, keyEquivalent: "")
         resultItem.isEnabled = false
         menu.addItem(resultItem)
-
-        menu.addItem(.separator())
-
-        let calcItem = NSMenuItem(title: "Calculate Drive Time…", action: #selector(promptForDestination), keyEquivalent: "d")
-        calcItem.target = self
-        menu.addItem(calcItem)
 
         menu.addItem(.separator())
 
@@ -38,36 +38,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    @objc private func promptForDestination() {
-        NSApp.activate(ignoringOtherApps: true)
+    private func makeFormView() -> NSView {
+        let width: CGFloat = 300
+        let pad: CGFloat = 14
+        let innerWidth = width - 2 * pad
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 162))
 
-        let alert = NSAlert()
-        alert.messageText = "Drive Time Calculator"
-        alert.addButton(withTitle: "Calculate")
-        alert.addButton(withTitle: "Cancel")
-
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 96))
         let fromLabel = NSTextField(labelWithString: "From:")
-        fromLabel.frame = NSRect(x: 0, y: 78, width: 280, height: 16)
-        let fromField = NSTextField(frame: NSRect(x: 0, y: 52, width: 280, height: 24))
-        fromField.stringValue = originAddress
-        let toLabel = NSTextField(labelWithString: "To:")
-        toLabel.frame = NSRect(x: 0, y: 28, width: 280, height: 16)
-        let toField = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        toField.placeholderString = "e.g. Philadelphia"
-        container.addSubview(fromLabel)
-        container.addSubview(fromField)
-        container.addSubview(toLabel)
-        container.addSubview(toField)
-        alert.accessoryView = container
-        alert.window.initialFirstResponder = toField
+        fromLabel.frame = NSRect(x: pad, y: 136, width: innerWidth, height: 16)
 
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        fromField = NSTextField(frame: NSRect(x: pad, y: 108, width: innerWidth, height: 24))
+        fromField.stringValue = originAddress
+
+        let toLabel = NSTextField(labelWithString: "To:")
+        toLabel.frame = NSRect(x: pad, y: 82, width: innerWidth, height: 16)
+
+        toField = NSTextField(frame: NSRect(x: pad, y: 54, width: innerWidth, height: 24))
+        toField.placeholderString = "e.g. Philadelphia"
+        toField.target = self
+        toField.action = #selector(calculate)
+
+        let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(closeMenu))
+        cancelButton.bezelStyle = .rounded
+        cancelButton.frame = NSRect(x: width - pad - 206, y: 12, width: 100, height: 30)
+
+        let calcButton = NSButton(title: "Calculate", target: self, action: #selector(calculate))
+        calcButton.bezelStyle = .rounded
+        calcButton.keyEquivalent = "\r"
+        calcButton.frame = NSRect(x: width - pad - 100, y: 12, width: 100, height: 30)
+
+        view.addSubview(fromLabel)
+        view.addSubview(fromField)
+        view.addSubview(toLabel)
+        view.addSubview(toField)
+        view.addSubview(cancelButton)
+        view.addSubview(calcButton)
+        return view
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        NSApp.activate(ignoringOtherApps: true)
+        // Main-queue dispatch doesn't run during menu tracking; use the run loop in common modes.
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
+            guard let self, let window = self.toField.window else { return }
+            window.makeFirstResponder(self.toField)
+        }
+    }
+
+    @objc private func closeMenu() {
+        statusItem.menu?.cancelTracking()
+    }
+
+    @objc private func calculate() {
+        guard !isCalculating else { return }
         let origin = fromField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let destination = toField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !origin.isEmpty, !destination.isEmpty else { return }
 
+        closeMenu()
+        isCalculating = true
         statusItem.button?.title = "🚗 …"
+
         cachedGeocode(origin) { [weak self] originResult in
             guard let self else { return }
             switch originResult {
@@ -141,9 +172,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func finish(with result: Result<MKDirections.ETAResponse, Error>, origin: String, destination: String) {
+        isCalculating = false
         statusItem.button?.title = "🚗"
 
-        let alert = NSAlert()
         switch result {
         case .success(let response):
             let formatter = DateComponentsFormatter()
@@ -152,17 +183,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let time = formatter.string(from: response.expectedTravelTime) ?? "?"
             let miles = response.distance / 1609.344
             let summary = "\(time) (\(String(format: "%.0f", miles)) mi)"
-
-            resultItem.title = "To \(destination): \(summary)"
-            alert.messageText = "Drive time to \(destination)"
-            alert.informativeText = "\(summary)\n\nFrom: \(origin)"
+            resultItem.title = origin == originAddress
+                ? "To \(destination): \(summary)"
+                : "\(origin) → \(destination): \(summary)"
         case .failure(let error):
-            alert.alertStyle = .warning
-            alert.messageText = "Couldn’t calculate drive time"
-            alert.informativeText = error.localizedDescription
+            resultItem.title = "Error: \(error.localizedDescription)"
         }
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
+
+        // Reopen the menu so the result is visible without any extra window.
+        statusItem.button?.performClick(nil)
     }
 }
 
