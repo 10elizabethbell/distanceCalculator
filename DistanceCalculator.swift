@@ -7,7 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var resultItem: NSMenuItem!
     private let geocoder = CLGeocoder()
     private let originAddress = "51 Franklin Ave, Seaside Heights, NJ"
-    private var cachedOriginCoordinate: CLLocationCoordinate2D?
+    private var geocodeCache: [String: CLLocationCoordinate2D] = [:]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -43,51 +43,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let alert = NSAlert()
         alert.messageText = "Drive Time Calculator"
-        alert.informativeText = "From: \(originAddress)"
         alert.addButton(withTitle: "Calculate")
         alert.addButton(withTitle: "Cancel")
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 46))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 96))
+        let fromLabel = NSTextField(labelWithString: "From:")
+        fromLabel.frame = NSRect(x: 0, y: 78, width: 280, height: 16)
+        let fromField = NSTextField(frame: NSRect(x: 0, y: 52, width: 280, height: 24))
+        fromField.stringValue = originAddress
         let toLabel = NSTextField(labelWithString: "To:")
-        toLabel.frame = NSRect(x: 0, y: 28, width: 260, height: 16)
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
-        field.placeholderString = "e.g. Philadelphia"
+        toLabel.frame = NSRect(x: 0, y: 28, width: 280, height: 16)
+        let toField = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        toField.placeholderString = "e.g. Philadelphia"
+        container.addSubview(fromLabel)
+        container.addSubview(fromField)
         container.addSubview(toLabel)
-        container.addSubview(field)
+        container.addSubview(toField)
         alert.accessoryView = container
-        alert.window.initialFirstResponder = field
+        alert.window.initialFirstResponder = toField
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let destination = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !destination.isEmpty else { return }
+        let origin = fromField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let destination = toField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !origin.isEmpty, !destination.isEmpty else { return }
 
         statusItem.button?.title = "🚗 …"
-        resolveOrigin { [weak self] originResult in
+        cachedGeocode(origin) { [weak self] originResult in
             guard let self else { return }
             switch originResult {
             case .failure(let error):
-                self.finish(with: .failure(error), destination: destination)
-            case .success(let origin):
-                self.geocode(destination) { destResult in
+                self.finish(with: .failure(error), origin: origin, destination: destination)
+            case .success(let originCoordinate):
+                self.cachedGeocode(destination) { destResult in
                     switch destResult {
                     case .failure(let error):
-                        self.finish(with: .failure(error), destination: destination)
-                    case .success(let dest):
-                        self.calculateETA(from: origin, to: dest, destinationName: destination)
+                        self.finish(with: .failure(error), origin: origin, destination: destination)
+                    case .success(let destCoordinate):
+                        self.calculateETA(from: originCoordinate, to: destCoordinate,
+                                          originName: origin, destinationName: destination)
                     }
                 }
             }
         }
     }
 
-    private func resolveOrigin(completion: @escaping (Result<CLLocationCoordinate2D, Error>) -> Void) {
-        if let cached = cachedOriginCoordinate {
+    private func cachedGeocode(_ address: String, completion: @escaping (Result<CLLocationCoordinate2D, Error>) -> Void) {
+        if let cached = geocodeCache[address] {
             completion(.success(cached))
             return
         }
-        geocode(originAddress) { [weak self] result in
+        geocode(address) { [weak self] result in
             if case .success(let coordinate) = result {
-                self?.cachedOriginCoordinate = coordinate
+                self?.geocodeCache[address] = coordinate
             }
             completion(result)
         }
@@ -111,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func calculateETA(from origin: CLLocationCoordinate2D,
                               to destination: CLLocationCoordinate2D,
+                              originName: String,
                               destinationName: String) {
         let request = MKDirections.Request()
         request.source = MKMapItem(placemark: MKPlacemark(coordinate: origin))
@@ -121,18 +129,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let response {
-                    self.finish(with: .success(response), destination: destinationName)
+                    self.finish(with: .success(response), origin: originName, destination: destinationName)
                 } else {
                     self.finish(with: .failure(error ?? NSError(
                         domain: "DistanceCalculator", code: 2,
                         userInfo: [NSLocalizedDescriptionKey: "No driving route found."]
-                    )), destination: destinationName)
+                    )), origin: originName, destination: destinationName)
                 }
             }
         }
     }
 
-    private func finish(with result: Result<MKDirections.ETAResponse, Error>, destination: String) {
+    private func finish(with result: Result<MKDirections.ETAResponse, Error>, origin: String, destination: String) {
         statusItem.button?.title = "🚗"
 
         let alert = NSAlert()
@@ -147,7 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             resultItem.title = "To \(destination): \(summary)"
             alert.messageText = "Drive time to \(destination)"
-            alert.informativeText = "\(summary)\n\nFrom: \(originAddress)"
+            alert.informativeText = "\(summary)\n\nFrom: \(origin)"
         case .failure(let error):
             alert.alertStyle = .warning
             alert.messageText = "Couldn’t calculate drive time"
