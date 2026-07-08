@@ -43,13 +43,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let alert = NSAlert()
         alert.messageText = "Drive Time Calculator"
-        alert.informativeText = "From: \(originAddress)\n\nEnter the destination city:"
+        alert.informativeText = "From: \(originAddress)"
         alert.addButton(withTitle: "Calculate")
         alert.addButton(withTitle: "Cancel")
 
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 46))
+        let toLabel = NSTextField(labelWithString: "To:")
+        toLabel.frame = NSRect(x: 0, y: 28, width: 260, height: 16)
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
         field.placeholderString = "e.g. Philadelphia"
-        alert.accessoryView = field
+        container.addSubview(toLabel)
+        container.addSubview(field)
+        alert.accessoryView = container
         alert.window.initialFirstResponder = field
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
